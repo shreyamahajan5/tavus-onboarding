@@ -5,6 +5,7 @@ export type ApiError =
   | { type: "NETWORK_ERROR"; message: string; developerMessage?: string }
   | { type: "RATE_LIMIT_ERROR"; message: string; developerMessage?: string }
   | { type: "VALIDATION_ERROR"; message: string; developerMessage?: string }
+  | { type: "PAYMENT_ERROR"; message: string; developerMessage?: string }
   | { type: "UNKNOWN_ERROR"; message: string; developerMessage?: string };
 
 export interface TavusResult {
@@ -134,6 +135,18 @@ async function generateTavusVideo(
 
     if (!response.ok) {
       console.error('Tavus API Error:', JSON.stringify(data, null, 2));
+
+      if (response.status === 402) {
+        return {
+          success: false,
+          error: {
+            type: "PAYMENT_ERROR",
+            message: "Tavus API quota exceeded or payment required",
+            developerMessage: "The API returned a 402 error. Please check your Tavus billing settings."
+          }
+        };
+      }
+
       return {
         success: false,
         error: {

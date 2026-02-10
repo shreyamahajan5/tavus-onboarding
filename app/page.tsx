@@ -186,6 +186,7 @@ export default function Home() {
     switch (errorType) {
       case 'AUTH_ERROR': return 'text-red-400 border-red-500/50 bg-red-950/20';
       case 'RATE_LIMIT_ERROR': return 'text-yellow-400 border-yellow-500/50 bg-yellow-950/20';
+      case 'PAYMENT_ERROR': return 'text-pink-400 border-pink-500/50 bg-pink-950/20 font-bold';
       case 'VALIDATION_ERROR': return 'text-orange-400 border-orange-500/50 bg-orange-950/20';
       case 'NETWORK_ERROR': return 'text-blue-400 border-blue-500/50 bg-blue-950/20';
       default: return 'text-red-400 border-red-500/50 bg-red-950/20';
