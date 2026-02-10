@@ -13,8 +13,11 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [videoId, setVideoId] = useState<string | null>(null);
+
+  // Refactored state to track the *active* job separately from form inputs
+  const [activeJob, setActiveJob] = useState<{ id: string; name: string; company: string } | null>(null);
   const [videoStatus, setVideoStatus] = useState<string | null>(null);
+
   const [error, setError] = useState<ApiError | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState('professional');
   const [showArchitecture, setShowArchitecture] = useState(false);
@@ -33,46 +36,67 @@ export default function Home() {
     setLogs((prev) => [...prev, `${new Date().toLocaleTimeString()} - ${message}`]);
   }, []);
 
+  const addToHistory = useCallback((id: string, name: string, company: string, url: string) => {
+    setHistory((prev) => {
+      // Check if already in history to avoid duplicates
+      if (prev.some(item => item.id === id)) return prev;
+      const newEntry = { id, name, company, url, date: new Date().toLocaleString() };
+      const updated = [newEntry, ...prev.slice(0, 4)];
+      localStorage.setItem('tavus_history', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   // Load history from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('tavus_history');
     if (saved) {
-      setHistory(JSON.parse(saved));
+      try {
+        setHistory(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to parse history', e);
+      }
     }
   }, []);
 
-  // Polling logic
+  // Polling logic - Depends on activeJob, NOT form inputs
   useEffect(() => {
     let interval: NodeJS.Timeout;
 
-    if (videoId && (videoStatus === 'queued' || videoStatus === 'processing')) {
+    if (activeJob && (videoStatus === 'queued' || videoStatus === 'processing')) {
       interval = setInterval(async () => {
-        const result = await getVideoStatus(videoId);
+        const result = await getVideoStatus(activeJob.id);
+
         if (result.success && result.status) {
+          // Only update status if it changed to avoid spamming logs? 
+          // Actually, duplicate logs are fine for "still processing" feedback, 
+          // but maybe we check if status changed. For now, keep as is.
           setVideoStatus(result.status);
-          addLog(`Status Update: ${result.status}`);
+
+          // Log status changes or periodic updates
+          if (videoStatus !== result.status) {
+            addLog(`Status Update: ${result.status}`);
+          }
+
           if (result.status === 'ready' && result.videoUrl) {
             setVideoUrl(result.videoUrl);
             addLog('✓ Video is ready for playback!');
+            addToHistory(activeJob.id, activeJob.name, activeJob.company, result.videoUrl);
 
-            // Save to history once ready
-            const newEntry = {
-              id: videoId,
-              name,
-              company: companyName,
-              url: result.videoUrl,
-              date: new Date().toLocaleString()
-            };
-            const updatedHistory = [newEntry, ...history.slice(0, 4)];
-            setHistory(updatedHistory);
-            localStorage.setItem('tavus_history', JSON.stringify(updatedHistory));
+            // Clear active job so we stop polling (or setIsGenerating(false) if we want)
+            // We keep it 'ready' but stop the interval naturally via deps or logic?
+            // Actually, we should set isGenerating to false here too if we want auto-stop.
+            setIsGenerating(false);
+          } else if (result.status === 'failed') {
+            addLog('❌ Video generation failed.');
+            setIsGenerating(false);
           }
         }
       }, 5000); // Poll every 5 seconds
     }
 
     return () => clearInterval(interval);
-  }, [videoId, videoStatus, name, companyName, history, addLog]);
+  }, [activeJob, videoStatus, addLog, addToHistory]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,7 +109,7 @@ export default function Home() {
     setIsGenerating(true);
     setLogs([]);
     setVideoUrl(null);
-    setVideoId(null);
+    setActiveJob(null); // Reset before starting new
     setVideoStatus(null);
     setError(null);
 
@@ -112,7 +136,11 @@ export default function Home() {
       if (background_url) addLog(`Adv. Param: background_url = ${background_url}`);
       if (watermarkUrl) addLog('Adv. Param: watermark_url is set');
 
-      const result = await generatePersonalExperience(name, companyName, script, {
+      // Capture current values for the job, protecting against form edits
+      const jobName = name;
+      const jobCompany = companyName;
+
+      const result = await generatePersonalExperience(jobName, jobCompany, script, {
         background_url,
         watermark_url: watermarkUrl || undefined
       });
@@ -120,17 +148,25 @@ export default function Home() {
       if (result.success && result.videoId) {
         addLog('API Response: 200 OK');
         addLog(`Video ID: ${result.videoId}`);
-        setVideoId(result.videoId);
+
+        // Start tracking this job
+        setActiveJob({ id: result.videoId, name: jobName, company: jobCompany });
+
         setVideoStatus(result.status || 'queued');
         addLog(`Initial Status: ${result.status || 'queued'}`);
 
         if (result.videoUrl) {
           setVideoUrl(result.videoUrl);
+          if (result.status === 'ready') {
+            addToHistory(result.videoId, jobName, jobCompany, result.videoUrl);
+            setIsGenerating(false);
+          }
         }
       } else {
         const err = result.error || { type: 'UNKNOWN_ERROR', message: 'Failed to generate video' };
         setError(err as ApiError);
         addLog(`Error: ${err.message}`);
+        setIsGenerating(false);
       }
     } catch (error) {
       const unknownError: ApiError = {
@@ -140,9 +176,10 @@ export default function Home() {
       };
       setError(unknownError);
       addLog(`Exception: ${unknownError.developerMessage}`);
-    } finally {
       setIsGenerating(false);
     }
+    // removed finally block since we handle isGenerating(false) in specific success/fail cases 
+    // to keep polling visual state active if needed
   };
 
   const getErrorColor = (errorType: ApiError['type']) => {
